@@ -28,32 +28,40 @@ foreach($config_array['products'] as $key => $product_id) {
 }
 $config_array['regex_array'] = $regex_array;
 
+$fileset_matched_array = array();
+$fileset_unmatched_array = array();
 
+function formatBytes($bytes, $precision = 2) { 
+	$units = array('B', 'KB', 'MB', 'GB', 'TB'); 
+
+	$bytes = max($bytes, 0); 
+	$pow = floor(($bytes ? log($bytes) : 0) / log(1024)); 
+	$pow = min($pow, count($units) - 1); 
+
+	// Uncomment one of the following alternatives
+	$bytes /= pow(1024, $pow);
+	// $bytes /= (1 << (10 * $pow)); 
+
+	return round($bytes, $precision) . ' ' . $units[$pow]; 
+} 
 function match_product(&$file_array) {
 	global $config_array;
-	$filename = $file_array['name'];
+	$filepath = $file_array['path'];
 	foreach($config_array['regex_array'] as $regex => $product_id) {
-		if (preg_match("/".$regex."/",$filename, $matches)) {
-			$fmt_array = explode(',',$config_array[$product_id]['productDateTimeFormatBegin']);
-			foreach($fmt_array as $key => $index) {
-				if (isset($mktime_cmd)) $mktime_cmd.=",";
-				else $mktime_cmd = "mktime(";
-				$mktime_cmd.= ($index==-1?0:$matches[$index]);
-			}
-			$mktime_cmd.=");";
-			$filenameBeginDateTime = eval($mktime_cmd);
-			unset($mktime_cmd);
-			$fmt_array = explode(',',$config_array[$product_id]['productDateTimeFormatEnd']);
-			foreach($fmt_array as $key => $index) {
-				if (isset($mktime_cmd)) $mktime_cmd.=",";
-				else $mktime_cmd = "mktime(";
-				$mktime_cmd.= ($index==-1?0:$matches[$index]);
-			}
-			$mktime_cmd.=");";
-			$filenameEndDateTime = eval($mktime_cmd);
-			$file_array["product"] = $product_id;
-			$file_array["begin_datetime"] = $product_id;
-			$file_array["end_datetime"] = $product_id;
+		if (preg_match("/".$regex."/",$filepath, $matches)) {
+	
+		$cmd_to_eval = '$dt = array(); ';
+		foreach($matches as $value) {
+			$cmd_to_eval.= '$dt[] = "'.$value.'"; ';
+		}
+		$t = eval($cmd_to_eval.'return '.$config_array[$product_id]['dateTimeBeginCallback'].';');
+		$begin_datetime = strftime("%F %T", mktime($t['hour'],$t['minute'],$t['second'],$t['month'],$t['day'],$t['year']));
+		$t = eval($cmd_to_eval.'return '.$config_array[$product_id]['dateTimeEndCallback'].';');
+		$end_datetime = strftime("%F %T", mktime($t['hour'],$t['minute'],$t['second'],$t['month'],$t['day'],$t['year']));
+
+			$file_array["product_id"] = $product_id;
+			$file_array["begin_datetime"] = $begin_datetime;
+			$file_array["end_datetime"] = $end_datetime;
 			return true;
 		}	
 	}
@@ -81,7 +89,7 @@ $dirname = realpath($options['d']);
 if (!is_dir($dirname)) die("Input directory is not a real directory path.\n"); 
 if (!is_readable($dirname)) die("Unable to read input directory.\n");
 
-echo "dirname = ".$dirname."\n";
+//echo "dirname = ".$dirname."\n";
 
 
 $tree_command = "tree";
@@ -91,18 +99,20 @@ foreach ($tree_options as $option => $description) {
 $tree_output_tmpfilename = tempnam(sys_get_temp_dir(), 'granuleSpider_xml_');
 $tree_command.=" ".$dirname." > ".$tree_output_tmpfilename;
 
-echo "tree_command=".$tree_command."\n";
+//echo "tree_command=".$tree_command."\n";
 
 exec($tree_command, $output=array(), $return_val);
 
 $tree_xml = new SimpleXMLElement(file_get_contents($tree_output_tmpfilename));
 
 function recurse_xml($directory, &$parent_dirname) {
+	global $fileset_matched_array;
+	global $fileset_unmatched_array;
 	foreach ($directory->file as $file) {
-	  $filename = $file['name'];
+	  $filename = (string)$file['name'];
 		$filepath = $parent_dirname."/".$filename;
-		$filesize = $file['size'];
-		$filedatetime = $file['time'];
+		$filesize = (string)$file['size'];
+		$filedatetime = (string)$file['time'];
 		$file_array = array(
 			'name' => $filename,
 		  'path' => $filepath,
@@ -110,7 +120,8 @@ function recurse_xml($directory, &$parent_dirname) {
       'last_modification_datetime' => $filedatetime);
 		if (!match_product($file_array)) {
 			echo "[WARNING] Unable to match ".$filepath."\n";
-		}
+			$fileset_unmatched_array[] = $file_array;
+		} else $fileset_matched_array[] = $file_array;
 	}
 	foreach ($directory->directory as $child_directory) {
 	   $current_dirname=$parent_dirname."/".$child_directory['name'];
@@ -123,8 +134,27 @@ foreach ($tree_xml->directory as $directory) {
 	 recurse_xml($directory,$directory['name']);
 }
 
+
 unset($tree_xml);
 unlink($tree_output_tmpfilename);
 
+$total_analyzed_files = count($fileset_matched_array)+count($fileset_unmatched_array);
+$total_matched_files = count($fileset_matched_array);
+$total_unmatched_files = count($fileset_unmatched_array);
+$product_stats = array();
+foreach($fileset_matched_array as $key => $value) {
+  if (!array_key_exists($value['product_id'], $product_stats)) $product_stats[$value['product_id']] = array('count' => 0, 'avg_filesize' => 0, 'sum_filesize' => 0, 'begin_datetime' => 100000, 'end_datetime' => 0);
+	$product_stats[$value['product_id']]['count']++;
+	$product_stats[$value['product_id']]['sum_filesize']+=$value['size'];
+	$product_stats[$value['product_id']]['begin_datetime']=min($value['begin_datetime'],$product_stats[$value['product_id']]['begin_datetime']);
+	$product_stats[$value['product_id']]['end_datetime']=max($value['end_datetime'],$product_stats[$value['product_id']]['end_datetime']);
+}
+foreach($product_stats as $product_id => $value) {
+	$product_stats[$product_id]['avg_filesize'] = formatBytes(round($value['sum_filesize'] / $value['count']));
+}
+echo "[INFO] Number of matched   file : ".count($fileset_matched_array)."\n";
+echo "[INFO] Number of unmatched file : ".count($fileset_unmatched_array)."\n";
+
+print_r($product_stats);
 
 ?>
