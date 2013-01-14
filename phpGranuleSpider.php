@@ -20,6 +20,8 @@
 
 *******************************************************************************/
 
+require_once("productDateTimeHandler.inc.php");
+
 date_default_timezone_set('GMT');
 
 $now_time = time();
@@ -95,6 +97,10 @@ function match_product(&$file_array) {
   $filepath = $file_array['path'];
   foreach($config_array['regex_array'] as $regex => $product_id) {
     if (preg_match("/".$regex."/",$filepath, $matches)) {
+      $functionHandlerName = "datetime_handler_".str_replace(array('-','.'),"_",$product_id);
+      $datetime_ts_array = call_user_func($functionHandlerName, $matches);
+
+/*
       $cmd_to_eval = '$dt = array(); ';
       foreach($matches as $value) {
         $cmd_to_eval.= '$dt[] = "'.$value.'"; ';
@@ -103,10 +109,13 @@ function match_product(&$file_array) {
       $begin_datetime = strftime("%F %T", mktime($t['hour'],$t['minute'],$t['second'],$t['month'],$t['day'],$t['year']));
       $t = eval($cmd_to_eval.'return '.$config_array[$product_id]['dateTimeEndCallback'].';');
       $end_datetime = strftime("%F %T", mktime($t['hour'],$t['minute'],$t['second'],$t['month'],$t['day'],$t['year']));
+*/
 
       $file_array["product_id"] = $product_id;
-      $file_array["begin_datetime"] = $begin_datetime;
-      $file_array["end_datetime"] = $end_datetime;
+      $file_array["begin_datetime"] = strftime("%F %T", $datetime_ts_array[0]);
+      $file_array["end_datetime"] = strftime("%F %T", $datetime_ts_array[1]);
+      $file_array["begin_datetime_ts"] = $datetime_ts_array[0];
+      $file_array["end_datetime_ts"] = $datetime_ts_array[1];
       return true;
     }
   }
@@ -302,7 +311,7 @@ if (is_dir($options_array['output_dirpath']) || mkdir($options_array['output_dir
     $output_unmatched.= $value['path']."\n";
   }
   $output_filename = $options_array['output_dirpath'].'/unmatched.txt';
-  if (!$output_handle = fopen($output_filename, 'w')) {
+  if (!$output_handle = fopen($output_filename, 'w+')) {
     echo "[ERROR] Unable to open output file ($output_filename)\n";
     continue;
   }
@@ -318,7 +327,7 @@ if (is_dir($options_array['output_dirpath']) || mkdir($options_array['output_dir
       $output_product.=$key.";".$value['path'].";".$value['name'].";".$value['size'].";".$value['begin_datetime'].";".$value['end_datetime']."\n";
     }
     $output_filename = $options_array['output_dirpath'].'/product_'.$product_id.'.txt';
-    if (!$output_handle = fopen($output_filename, 'w')) {
+    if (!$output_handle = fopen($output_filename, 'w+')) {
       echo "[ERROR] Unable to open output file ($output_filename)\n";
       continue;
     }
